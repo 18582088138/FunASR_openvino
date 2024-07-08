@@ -4,6 +4,9 @@
 #  MIT License  (https://opensource.org/licenses/MIT)
 
 import torch
+import numpy as np
+import openvino as ov
+from openvino.runtime import PartialShape, Type, serialize, Core
 
 from funasr.register import tables
 
@@ -72,6 +75,7 @@ def export_rebuild_model(model, **kwargs):
 
     # before decoder convert into export class
     embedder_class = ContextualEmbedderExport
+    tmp_eb_model = embedder_class(model)
     embedder_model = embedder_class(model, onnx=is_onnx)
 
     decoder_class = tables.decoder_classes.get(kwargs["decoder"] + "Export")
@@ -112,6 +116,36 @@ def export_rebuild_model(model, **kwargs):
     
     embedder_model.export_name = "model_eb"
     backbone_model.export_name = "model"
+
+    print("-------------convert to IR model-----------------------------------")
+
+    feats_dim=560
+    speech = torch.randn(1, 30, feats_dim)
+    speech_lengths = torch.tensor([30], dtype=torch.int32)
+    bias_embed = torch.randn(1, 2, 512)
+    bb_input = {"speech": speech,
+                "speech_lengths": speech_lengths,
+                "bias_embed": bias_embed,
+                }
+    ov_model = ov.convert_model(backbone_model, example_input=bb_input)
+    serialize(ov_model, 'model_bb.xml')
+    print("== export bb_model IR success ==")
+
+    hotword = torch.tensor(
+            [
+                [10, 11, 12, 13, 14, 10, 11, 12, 13, 14],
+                [100, 101, 0, 0, 0, 0, 0, 0, 0, 0],
+                [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [10, 11, 12, 13, 14, 10, 11, 12, 13, 14],
+                [100, 101, 0, 0, 0, 0, 0, 0, 0, 0],
+                [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            ],
+            dtype=torch.int32,
+        )
+
+    ov_eb_model = ov.convert_model(embedder_model, example_input=(hotword))
+    serialize(ov_eb_model, 'model_eb.xml')
+    print("== export eb_model IR success ==")
 
     return backbone_model, embedder_model
 
@@ -168,8 +202,8 @@ def export_backbone_forward(
 
     # get predicted timestamps
     us_alphas, us_cif_peak = self.predictor.get_upsample_timestmap(enc, mask, pre_token_length)
-    
-    return decoder_out, pre_token_length, us_alphas, us_cif_peak
+    # return decoder_out, pre_token_length, us_alphas, us_cif_peak
+    return decoder_out, pre_token_length, alphas
 
 
 def export_backbone_dummy_inputs(self):
@@ -184,19 +218,18 @@ def export_backbone_input_names(self):
 
 
 def export_backbone_output_names(self):
-    return ["logits", "token_num", "us_alphas", "us_cif_peak"]
+    # return ["logits", "token_num", "us_alphas", "us_cif_peak"]
+    return ["logits", "token_num", "alphas"]
 
 
 def export_backbone_dynamic_axes(self):
     return {
         "speech": {0: "batch_size", 1: "feats_length"},
-        "speech_lengths": {
-            0: "batch_size",
-        },
+        "speech_lengths": {0: "batch_size",},
         "bias_embed": {0: "batch_size", 1: "num_hotwords"},
         "logits": {0: "batch_size", 1: "logits_length"},
         "pre_acoustic_embeds": {1: "feats_length1"},
-        "us_alphas": {0: "batch_size", 1: "alphas_length"},
-        "us_cif_peak": {0: "batch_size", 1: "alphas_length"},
+        # "us_alphas": {0: "batch_size", 1: "alphas_length"},
+        # "us_cif_peak": {0: "batch_size", 1: "alphas_length"},
     }
 

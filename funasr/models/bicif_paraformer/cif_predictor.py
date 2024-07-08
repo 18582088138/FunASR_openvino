@@ -468,40 +468,35 @@ class CifPredictorV3Export(torch.nn.Module):
 def cif_export(hidden, alphas, threshold: float):
     batch_size, len_time, hidden_size = hidden.size()
     threshold = torch.tensor([threshold], dtype=alphas.dtype).to(alphas.device)
-
     # loop varss
     integrate = torch.zeros([batch_size], dtype=alphas.dtype, device=hidden.device)
     frame = torch.zeros([batch_size, hidden_size], dtype=hidden.dtype, device=hidden.device)
-    # intermediate vars along time
-    list_fires = []
-    list_frames = []
-
-    for t in range(len_time):
+    
+    fires = torch.zeros([batch_size, len_time])
+    frames = torch.zeros_like(hidden)
+    for t in range(hidden.shape[1]):   
         alpha = alphas[:, t]
-        distribution_completion = (
-            torch.ones([batch_size], dtype=alphas.dtype, device=hidden.device) - integrate
-        )
-
+        distribution_completion = torch.ones([batch_size]) - integrate
         integrate += alpha
-        list_fires.append(integrate)
-
+        fires[:, t] = integrate
         fire_place = integrate >= threshold
-        integrate = torch.where(
-            fire_place,
-            integrate - torch.ones([batch_size], dtype=alphas.dtype, device=hidden.device),
-            integrate,
-        )
-        cur = torch.where(fire_place, distribution_completion, alpha)
+           
+        integrate = torch.where(fire_place,
+		                        integrate - torch.ones([batch_size]),
+		                        integrate)
+
+        cur = torch.where(fire_place,
+		                  distribution_completion,
+		                  alpha)
         remainds = alpha - cur
-
+		
         frame += cur[:, None] * hidden[:, t, :]
-        list_frames.append(frame)
-        frame = torch.where(
-            fire_place[:, None].repeat(1, hidden_size), remainds[:, None] * hidden[:, t, :], frame
-        )
+        frames[:, t] = frame
 
-    fires = torch.stack(list_fires, 1)
-    frames = torch.stack(list_frames, 1)
+
+        frame = torch.where(fire_place[:, None].repeat(1, hidden_size),
+		                    remainds[:, None] * hidden[:, t, :],
+		                    frame)
 
     fire_idxs = fires >= threshold
     frame_fires = torch.zeros_like(hidden)
